@@ -46,7 +46,7 @@ export const mastra = new Mastra({
     return async (c: any) => {
       try {
         const body = await c.req.json();
-        const { message, selection, session_id, step, type } = body;
+        const { message, selection, session_id, step, type, selectedIndustries, jobSelection, citySelection } = body;
         const sessionId = session_id || `sess-${Date.now()}`;
 
         // Step 1 pill → return Step 2 pills
@@ -85,18 +85,55 @@ export const mastra = new Mastra({
           });
         }
 
-        // Search selection — city selected → AI greeting, start free text
+        // Search selection — city selected → return industry checkbox
         if (type === 'search-selection' && step === 'city') {
           const agent = mastra.getAgent('compensationAgent');
           const result = await agent.generate([
             {
               role: 'user',
-              content: `The user has selected job: ${body.jobSelection} 
-              and city: ${selection}. 
-              Greet them and ask what they would like to know 
-              about compensation analysis.`
+              content: `The user is doing a compensation analysis for 
+              a ${body.jobSelection} role in ${selection}.
+              Return ONLY this exact format: "Select industry : [SectorType]"
+              where [SectorType] is a single broad sector label relevant to their job.
+              Examples: "Select industry : Super Sector", "Select industry : Tech Sector", "Select industry : Finance Sector"
+              Return the message string only. No explanation. No punctuation after it.`
             }
           ]);
+
+          return c.json({
+            type: 'checkbox',
+            session_id: sessionId,
+            message: result.text.trim(),
+            options: {
+              datasource: 'mongodb:survey-metadata-supersector',
+              filters: ['industry']
+            }
+          });
+        }
+
+        // Checkbox selection — industries selected → AI greeting → free text
+        if (type === 'checkbox-selection') {
+          if (!selectedIndustries || selectedIndustries.length === 0) {
+            return c.json({
+              type: 'error',
+              session_id: sessionId,
+              payload: { message: 'Please select at least one industry.' }
+            }, 400);
+          }
+
+          const agent = mastra.getAgent('compensationAgent');
+          const result = await agent.generate([
+            {
+              role: 'user',
+              content: `The user has completed parameter selection:
+              - Job title: ${jobSelection}
+              - City: ${citySelection}
+              - Industries: ${selectedIndustries.join(', ')}
+              Greet them warmly, confirm their selections briefly, 
+              and ask what they would like to know about compensation analysis.`
+            }
+          ]);
+
           return c.json({
             type: 'text',
             session_id: sessionId,
