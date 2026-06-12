@@ -1,0 +1,26 @@
+{
+  "name": "mastra",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+  "dev": "mastra dev",
+  "build": "tsc",
+  "start": "node dist/index.js"
+},
+"type": "module",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.69",
+    "@mastra/core": "^1.41.0",
+    "mastra": "^1.12.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
