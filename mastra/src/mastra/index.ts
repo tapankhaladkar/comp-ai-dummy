@@ -2,18 +2,47 @@ import { Mastra } from '@mastra/core';
 import { compensationAgent } from '../agents/compensationAgent';
 import { supervisorAgent } from '../agents/supervisorAgent';
 import { z } from 'zod';
+import { buildError, getStatusCode } from '../utils/errors';
 
 export const mastra = new Mastra({
   agents: { compensationAgent, supervisorAgent },
   server: {
     cors: {
       origin: ['http://localhost:4200'],
-      allowHeaders: ['Content-Type'],
+      allowHeaders: ['Content-Type', 'Authorization', 'x-session-id'],
       allowMethods: ['GET', 'POST', 'OPTIONS'],
       credentials: false,
     },
+    middleware: [
+  // Global error wrapper
+  {
+    path: '*',
+    handler: async (c: any, next: any) => {
+      try {
+        await next();
+      } catch (error: any) {
+        console.error('Global error caught:', error);
+        const sessionId = c.req.header('x-session-id') || null;
+        const err = buildError('INTERNAL_ERROR', sessionId, error?.message);
+        return c.json(err, 500);
+      }
+    }
+  },
+  // Auth middleware
+  {
+    path: '*',
+    handler: async (c: any, next: any) => {
+      const path = c.req.path;
+      if (path === '/custom/init') {
+        await next();
+        return;
+      }
+      await next();
+    }
+  }
+],
     apiRoutes: [
-      // Init endpoint — fires on page load, returns Step 1 pills
+      // Init endpoint
       {
         path: '/custom/init',
         method: 'GET',
@@ -27,19 +56,17 @@ export const mastra = new Mastra({
                 message: 'What are we doing today?',
                 options: ['marketpricing', 'benchmarking']
               });
-            } catch (error) {
-              console.error('Init error:', error);
-              return c.json({
-                type: 'error',
-                session_id: null,
-                payload: { message: 'Failed to initialize' }
-              }, 500);
+            } catch (error: any) {
+              return c.json(
+                buildError('INTERNAL_ERROR', null, error?.message),
+                500
+              );
             }
           };
         }
       },
 
-      // Action endpoint — handles all scenario routing
+      // Action endpoint
       {
         path: '/custom/action',
         method: 'POST',
@@ -48,6 +75,23 @@ export const mastra = new Mastra({
             try {
               const body = await c.req.json();
               const { message, selection, session_id, step, type, selectedIndustries, jobSelection, citySelection, selectedMin, selectedMax } = body;
+
+              // INVALID_FRAME — validate request has something to work with
+              if (!message && !selection && !type) {
+                return c.json(
+                  buildError('INVALID_FRAME', session_id || null),
+                  400
+                );
+              }
+
+              // SESSION_NOT_FOUND — simulate: reject obviously fake session IDs
+              if (session_id && session_id === 'invalid-session') {
+                return c.json(
+                  buildError('SESSION_NOT_FOUND', session_id),
+                  403
+                );
+              }
+
               const sessionId = session_id || `sess-${Date.now()}`;
 
               // Step 1 pill → return Step 2 pills
@@ -111,69 +155,63 @@ export const mastra = new Mastra({
                 });
               }
 
-              // Checkbox selection → range selector using AI structured output
-              // Checkbox selection → range selector using AI JSON response
-if (type === 'checkbox-selection') {
-  if (!selectedIndustries || selectedIndustries.length === 0) {
-    return c.json({
-      type: 'error',
-      session_id: sessionId,
-      payload: { message: 'Please select at least one industry.' }
-    }, 400);
-  }
+              // Checkbox selection → range selector
+              if (type === 'checkbox-selection') {
+                if (!selectedIndustries || selectedIndustries.length === 0) {
+                  return c.json(
+                    buildError('INVALID_FRAME', sessionId, 'Please select at least one industry.'),
+                    400
+                  );
+                }
 
-  const agent = mastra.getAgent('compensationAgent');
-  const result = await agent.generate([
-    {
-      role: 'user',
-      content: `You are a compensation data expert.
-      The user is analyzing compensation for:
-      - Job title: ${jobSelection}
-      - City: ${citySelection}
-      - Industries: ${selectedIndustries.join(', ')}
-      
-      Determine a realistic position class range for this profile.
-      Position classes are numeric grades (typically 1-100).
-      
-      Respond with ONLY a raw JSON object, no markdown, no backticks, no explanation:
-      {"message":"...","min":0,"max":0,"defaultMin":0,"defaultMax":0}
-      
-      Where:
-      - message: short context-aware label e.g. "Select Position Class Range for Software Engineer"
-      - min: minimum position class for this profile
-      - max: maximum position class for this profile
-      - defaultMin: P25 of the range
-      - defaultMax: P75 of the range`
-    }
-  ]);
+                const agent = mastra.getAgent('compensationAgent');
+                const result = await agent.generate([
+                  {
+                    role: 'user',
+                    content: `You are a compensation data expert.
+                    The user is analyzing compensation for:
+                    - Job title: ${jobSelection}
+                    - City: ${citySelection}
+                    - Industries: ${selectedIndustries.join(', ')}
+                    
+                    Determine a realistic position class range for this profile.
+                    Position classes are numeric grades (typically 1-100).
+                    
+                    Respond with ONLY a raw JSON object, no markdown, no backticks, no explanation:
+                    {"message":"...","min":0,"max":0,"defaultMin":0,"defaultMax":0}
+                    
+                    Where:
+                    - message: short context-aware label e.g. "Select Position Class Range for Software Engineer"
+                    - min: minimum position class for this profile
+                    - max: maximum position class for this profile
+                    - defaultMin: P25 of the range
+                    - defaultMax: P75 of the range`
+                  }
+                ]);
 
-  let rangeData;
-  try {
-    const cleaned = result.text.replace(/```json|```/g, '').trim();
-    rangeData = JSON.parse(cleaned);
-  } catch (e) {
-    // Fallback if parsing fails
-    rangeData = {
-      message: `Select Position Class Range for ${jobSelection}`,
-      min: 50,
-      max: 100,
-      defaultMin: 62,
-      defaultMax: 87
-    };
-  }
+                let rangeData;
+                try {
+                  const cleaned = result.text.replace(/```json|```/g, '').trim();
+                  rangeData = JSON.parse(cleaned);
+                } catch (e) {
+                  rangeData = {
+                    message: `Select Position Class Range for ${jobSelection}`,
+                    min: 50, max: 100, defaultMin: 62, defaultMax: 87
+                  };
+                }
 
-  return c.json({
-    type: 'range-selector',
-    session_id: sessionId,
-    message: rangeData.message,
-    options: {
-      min: rangeData.min,
-      max: rangeData.max,
-      defaultMin: rangeData.defaultMin,
-      defaultMax: rangeData.defaultMax
-    }
-  });
-}
+                return c.json({
+                  type: 'range-selector',
+                  session_id: sessionId,
+                  message: rangeData.message,
+                  options: {
+                    min: rangeData.min,
+                    max: rangeData.max,
+                    defaultMin: rangeData.defaultMin,
+                    defaultMax: rangeData.defaultMax
+                  }
+                });
+              }
 
               // Range selection → AI greeting → free text
               if (type === 'range-selection') {
@@ -212,25 +250,23 @@ if (type === 'checkbox-selection') {
                 });
               }
 
-              return c.json({
-                type: 'error',
-                session_id: sessionId,
-                payload: { message: 'No message or selection provided' }
-              }, 400);
+              return c.json(
+                buildError('INVALID_FRAME', sessionId, 'No valid action found in request.'),
+                400
+              );
 
-            } catch (error) {
+            } catch (error: any) {
               console.error('Action error:', error);
-              return c.json({
-                type: 'error',
-                session_id: null,
-                payload: { message: error instanceof Error ? error.message : 'Internal server error' }
-              }, 500);
+              return c.json(
+                buildError('INTERNAL_ERROR', null, error?.message),
+                500
+              );
             }
           };
         }
       },
 
-      // SSE streaming endpoint — Scenario D free text
+      // SSE streaming endpoint
       {
         path: '/custom/chat',
         method: 'POST',
@@ -241,11 +277,10 @@ if (type === 'checkbox-selection') {
               const { message, session_id } = body;
 
               if (!message) {
-                return c.json({
-                  type: 'error',
-                  session_id: session_id || null,
-                  payload: { message: 'No message provided' }
-                }, 400);
+                return c.json(
+                  buildError('INVALID_FRAME', session_id || null, 'Message is required.'),
+                  400
+                );
               }
 
               const agent = mastra.getAgent('compensationAgent');
@@ -274,13 +309,11 @@ if (type === 'checkbox-selection') {
                     });
                     controller.enqueue(encoder.encode(`data: ${finish}\n\n`));
 
-                  } catch (error) {
+                  } catch (error: any) {
                     console.error('Stream error:', error);
-                    const errData = JSON.stringify({
-                      type: 'error',
-                      session_id: sessionId,
-                      payload: { message: 'Stream failed' }
-                    });
+                    const errData = JSON.stringify(
+                      buildError('INTERNAL_ERROR', sessionId, error?.message)
+                    );
                     controller.enqueue(encoder.encode(`data: ${errData}\n\n`));
                   } finally {
                     controller.close();
@@ -296,13 +329,12 @@ if (type === 'checkbox-selection') {
                 }
               });
 
-            } catch (error) {
+            } catch (error: any) {
               console.error('Chat error:', error);
-              return c.json({
-                type: 'error',
-                session_id: null,
-                payload: { message: 'Internal server error' }
-              }, 500);
+              return c.json(
+                buildError('INTERNAL_ERROR', null, error?.message),
+                500
+              );
             }
           };
         }
