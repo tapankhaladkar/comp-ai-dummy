@@ -1,33 +1,20 @@
 import { Agent } from '@mastra/core/agent';
 import { openai } from '@ai-sdk/openai';
-import { pillTool } from '../tools/pillTool';
+import { pricingPillTool, benchmarkPillTool } from '../tools/pillTools';
 
 export const supervisorAgent = new Agent({
   id: 'supervisor-agent',
   name: 'Supervisor Agent',
   instructions: `You are the orchestration agent for a Compensation AI Assistant.
 
-Your job is to guide the user through a two-step workflow selection process.
+Your ONLY job is to select the right pill tool based on what the user selected.
 
-STEP 1 — When the conversation starts with no prior selection:
-- Call pill-tool with step = "step1"
-- Return the result directly, do not add any text
-
-STEP 2 — When the user has selected from step1 (marketpricing or benchmarking):
-- Call pill-tool with step = "step2"  
-- Return the result directly, do not add any text
-
-AFTER STEP 2 — When the user has selected from step2 (family, sub-family, spec, or job):
-- Acknowledge their selection warmly
-- Ask them what they would like to know
-- This begins the free text conversation
-
-If the user wants to change their selection at any point, allow it and go back to the appropriate step.
-
-IMPORTANT:
-- Never make up pill options
-- Always use the pill-tool for steps 1 and 2
-- Never add commentary during step 1 and step 2, just return the tool result`,
+RULES:
+- If the user selected "marketpricing" → call the pricing-pills tool
+- If the user selected "benchmarking" → call the benchmark-pills tool
+- ALWAYS call a tool. NEVER respond with text.
+- NEVER make up pill options. Only return what the tool gives you.
+- Do NOT add any commentary or explanation. Just call the tool.`,
   model: openai('gpt-4o-mini'),
-  tools: { pillTool },
+  tools: { pricingPillTool, benchmarkPillTool },
 });

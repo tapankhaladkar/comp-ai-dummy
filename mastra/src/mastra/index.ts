@@ -14,35 +14,33 @@ export const mastra = new Mastra({
       credentials: false,
     },
     middleware: [
-  // Global error wrapper
-  {
-    path: '*',
-    handler: async (c: any, next: any) => {
-      try {
-        await next();
-      } catch (error: any) {
-        console.error('Global error caught:', error);
-        const sessionId = c.req.header('x-session-id') || null;
-        const err = buildError('INTERNAL_ERROR', sessionId, error?.message);
-        return c.json(err, 500);
+      {
+        path: '*',
+        handler: async (c: any, next: any) => {
+          try {
+            await next();
+          } catch (error: any) {
+            console.error('Global error caught:', error);
+            const sessionId = c.req.header('x-session-id') || null;
+            const err = buildError('INTERNAL_ERROR', sessionId, error?.message);
+            return c.json(err, 500);
+          }
+        }
+      },
+      {
+        path: '*',
+        handler: async (c: any, next: any) => {
+          const path = c.req.path;
+          if (path === '/custom/init') {
+            await next();
+            return;
+          }
+          await next();
+        }
       }
-    }
-  },
-  // Auth middleware
-  {
-    path: '*',
-    handler: async (c: any, next: any) => {
-      const path = c.req.path;
-      if (path === '/custom/init') {
-        await next();
-        return;
-      }
-      await next();
-    }
-  }
-],
+    ],
     apiRoutes: [
-      // Init endpoint
+      // Init endpoint — hardcoded Step 1 pills
       {
         path: '/custom/init',
         method: 'GET',
@@ -66,7 +64,7 @@ export const mastra = new Mastra({
         }
       },
 
-      // Action endpoint
+      // Action endpoint — handles all scenario routing
       {
         path: '/custom/action',
         method: 'POST',
@@ -76,7 +74,6 @@ export const mastra = new Mastra({
               const body = await c.req.json();
               const { message, selection, session_id, step, type, selectedIndustries, jobSelection, citySelection, selectedMin, selectedMax } = body;
 
-              // INVALID_FRAME — validate request has something to work with
               if (!message && !selection && !type) {
                 return c.json(
                   buildError('INVALID_FRAME', session_id || null),
@@ -84,7 +81,6 @@ export const mastra = new Mastra({
                 );
               }
 
-              // SESSION_NOT_FOUND — simulate: reject obviously fake session IDs
               if (session_id && session_id === 'invalid-session') {
                 return c.json(
                   buildError('SESSION_NOT_FOUND', session_id),
