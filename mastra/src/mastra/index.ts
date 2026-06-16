@@ -55,7 +55,7 @@ export const mastra = new Mastra({
             try {
               const sessionId = `sess-${Date.now()}`;
               return c.json({
-                type: 'pill-type',
+                type: 'chips',
                 conversationId: sessionId,
                 message: 'What are we doing today?',
                 options: ['marketpricing', 'benchmarking']
@@ -78,7 +78,12 @@ export const mastra = new Mastra({
           return async (c: any) => {
             try {
               const body = await c.req.json();
-              const { message, selection, conversationId, step, type, selectedIndustries, jobSelection, citySelection, selectedMin, selectedMax } = body;
+              const { message, selection, conversationId, step, type, selectedIndustries, jobSelection, citySelection, selectedMin, selectedMax, role, context } = body;
+
+// Log context for debugging — in production this carries threadId, email, smiCode etc.
+              if (context) {
+                console.log('Request context:', JSON.stringify(context));
+}
 
               if (!message && !selection && !type) {
                 return c.json(
@@ -99,7 +104,7 @@ export const mastra = new Mastra({
               // Step 1 pill → return Step 2 pills
               if (selection && step === 'step1') {
                 return c.json({
-                  type: 'pill-type',
+                  type: 'chips',
                   conversationId: sessionId,
                   message: 'What are we pricing today?',
                   options: ['family', 'sub-family', 'spec', 'job']
@@ -276,7 +281,11 @@ export const mastra = new Mastra({
           return async (c: any) => {
             try {
               const body = await c.req.json();
-              const { message, conversationId } = body;
+              const { message, conversationId, role, context } = body;
+
+              if (context) {
+                console.log('Chat context:', JSON.stringify(context));
+              }
 
               if (!message) {
                 return c.json(
