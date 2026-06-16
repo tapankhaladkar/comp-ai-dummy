@@ -9,36 +9,42 @@ export const mastra = new Mastra({
   server: {
     cors: {
       origin: ['http://localhost:4200'],
-      allowHeaders: ['Content-Type', 'Authorization', 'x-session-id'],
+      allowHeaders: ['Content-Type', 'Authorization', 'x-conversation-id'],
       allowMethods: ['GET', 'POST', 'OPTIONS'],
       credentials: false,
     },
     middleware: [
-      {
-        path: '*',
-        handler: async (c: any, next: any) => {
-          try {
-            await next();
-          } catch (error: any) {
-            console.error('Global error caught:', error);
-            const sessionId = c.req.header('x-session-id') || null;
-            const err = buildError('INTERNAL_ERROR', sessionId, error?.message);
-            return c.json(err, 500);
-          }
-        }
-      },
-      {
-        path: '*',
-        handler: async (c: any, next: any) => {
-          const path = c.req.path;
-          if (path === '/custom/init') {
-            await next();
-            return;
-          }
-          await next();
-        }
+  // Global error wrapper
+  {
+    path: '*',
+    handler: async (c: any, next: any) => {
+      try {
+        await next();
+      } catch (error: any) {
+        console.error('Global error caught:', error);
+        const conversationId = c.get('conversationId') || null;
+        const err = buildError('INTERNAL_ERROR', conversationId, error?.message);
+        return c.json(err, 500);
       }
-    ],
+    }
+  },
+  
+  {
+  path: '*',
+  handler: async (c: any, next: any) => {
+    const existingId = c.req.header('x-conversation-id');
+    c.set('conversationId', existingId || `sess-${Date.now()}`);
+    await next();
+  }
+},
+  
+  {
+    path: '*',
+    handler: async (c: any, next: any) => {
+      await next();
+    }
+  }
+],
     apiRoutes: [
       // Init endpoint — hardcoded Step 1 pills
       {
@@ -50,7 +56,7 @@ export const mastra = new Mastra({
               const sessionId = `sess-${Date.now()}`;
               return c.json({
                 type: 'pill-type',
-                session_id: sessionId,
+                conversationId: sessionId,
                 message: 'What are we doing today?',
                 options: ['marketpricing', 'benchmarking']
               });
@@ -72,29 +78,29 @@ export const mastra = new Mastra({
           return async (c: any) => {
             try {
               const body = await c.req.json();
-              const { message, selection, session_id, step, type, selectedIndustries, jobSelection, citySelection, selectedMin, selectedMax } = body;
+              const { message, selection, conversationId, step, type, selectedIndustries, jobSelection, citySelection, selectedMin, selectedMax } = body;
 
               if (!message && !selection && !type) {
                 return c.json(
-                  buildError('INVALID_FRAME', session_id || null),
+                  buildError('INVALID_FRAME', conversationId || null),
                   400
                 );
               }
 
-              if (session_id && session_id === 'invalid-session') {
+              if (conversationId && conversationId === 'invalid-session') {
                 return c.json(
-                  buildError('SESSION_NOT_FOUND', session_id),
+                  buildError('SESSION_NOT_FOUND', conversationId),
                   403
                 );
               }
 
-              const sessionId = session_id || `sess-${Date.now()}`;
+              const sessionId = c.get('conversationId') || conversationId || `sess-${Date.now()}`;
 
               // Step 1 pill → return Step 2 pills
               if (selection && step === 'step1') {
                 return c.json({
                   type: 'pill-type',
-                  session_id: sessionId,
+                  conversationId: sessionId,
                   message: 'What are we pricing today?',
                   options: ['family', 'sub-family', 'spec', 'job']
                 });
@@ -104,7 +110,7 @@ export const mastra = new Mastra({
               if (selection && step === 'step2') {
                 return c.json({
                   type: 'search',
-                  session_id: sessionId,
+                  conversationId: sessionId,
                   message: 'Select a job specialization',
                   options: {
                     datasource: 'mongodb:survey-metadata-jobarchitecture',
@@ -117,7 +123,7 @@ export const mastra = new Mastra({
               if (type === 'search-selection' && step === 'job') {
                 return c.json({
                   type: 'search',
-                  session_id: sessionId,
+                  conversationId: sessionId,
                   message: 'Select a city',
                   options: {
                     datasource: 'mongodb:survey-metadata-location',
@@ -142,7 +148,7 @@ export const mastra = new Mastra({
                 ]);
                 return c.json({
                   type: 'checkbox',
-                  session_id: sessionId,
+                  conversationId: sessionId,
                   message: result.text.trim(),
                   options: {
                     datasource: 'mongodb:survey-metadata-supersector',
@@ -198,7 +204,7 @@ export const mastra = new Mastra({
 
                 return c.json({
                   type: 'range-selector',
-                  session_id: sessionId,
+                  conversationId: sessionId,
                   message: rangeData.message,
                   options: {
                     min: rangeData.min,
@@ -228,7 +234,7 @@ export const mastra = new Mastra({
 
                 return c.json({
                   type: 'text',
-                  session_id: sessionId,
+                  conversationId: sessionId,
                   payload: { text: result.text }
                 });
               }
@@ -241,7 +247,7 @@ export const mastra = new Mastra({
                 ]);
                 return c.json({
                   type: 'text',
-                  session_id: sessionId,
+                  conversationId: sessionId,
                   payload: { text: result.text }
                 });
               }
@@ -270,17 +276,17 @@ export const mastra = new Mastra({
           return async (c: any) => {
             try {
               const body = await c.req.json();
-              const { message, session_id } = body;
+              const { message, conversationId } = body;
 
               if (!message) {
                 return c.json(
-                  buildError('INVALID_FRAME', session_id || null, 'Message is required.'),
+                  buildError('INVALID_FRAME', conversationId || null, 'Message is required.'),
                   400
                 );
               }
 
               const agent = mastra.getAgent('compensationAgent');
-              const sessionId = session_id || `sess-${Date.now()}`;
+              const sessionId = c.get('conversationId') || conversationId || `sess-${Date.now()}`;
 
               const stream = new ReadableStream({
                 async start(controller) {
@@ -293,7 +299,7 @@ export const mastra = new Mastra({
                     for await (const chunk of result.textStream) {
                       const data = JSON.stringify({
                         type: 'text-delta',
-                        session_id: sessionId,
+                        conversationId: sessionId,
                         payload: { textDelta: chunk }
                       });
                       controller.enqueue(encoder.encode(`data: ${data}\n\n`));
@@ -301,7 +307,7 @@ export const mastra = new Mastra({
 
                     const finish = JSON.stringify({
                       type: 'finish',
-                      session_id: sessionId
+                      conversationId: sessionId
                     });
                     controller.enqueue(encoder.encode(`data: ${finish}\n\n`));
 

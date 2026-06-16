@@ -47,13 +47,13 @@ export const ERROR_DEFINITIONS: Record<ErrorCode, { message: string; retryable: 
 
 export function buildError(
   errorCode: ErrorCode,
-  sessionId: string | null,
+  conversationId: string | null,
   customMessage?: string
 ) {
   const def = ERROR_DEFINITIONS[errorCode];
   return {
     type: 'error' as const,
-    session_id: sessionId,
+    conversationId: conversationId,
     payload: {
       errorCode,
       message: customMessage || def.message,
