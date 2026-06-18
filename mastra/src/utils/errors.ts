@@ -65,3 +65,7 @@ export function buildError(
 export function getStatusCode(errorCode: ErrorCode): number {
   return ERROR_DEFINITIONS[errorCode].status;
 }
+
+export function buildSSEEvent(event: string, data: object): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
