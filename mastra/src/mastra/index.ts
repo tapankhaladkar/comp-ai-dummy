@@ -277,6 +277,90 @@ const result = await agent.stream(
                     return;
                   }
 
+                  // CONFIRMATION — AI reads user response and decides to trigger analysis
+if (currentStep === 'confirmation') {
+  const agent = mastra.getAgent('compensationAgent');
+
+  const result = await agent.generate([
+    {
+      role: 'user',
+      content: `You are a compensation analysis assistant.
+      
+      The user has provided all parameters for a compensation analysis:
+      - Job title: ${context.jobSelection || 'Unknown'}
+      - City: ${context.citySelection || 'Unknown'}
+      - Industries: ${context.selectedIndustries || 'Unknown'}
+      - Position class range: ${context.selectedMin || 'Unknown'} to ${context.selectedMax || 'Unknown'}
+      - Survey code: ${context.surveyCode || 'Unknown'}
+      - SMI code: ${context.smiCode || 'Unknown'}
+      
+      The user responded: "${message}"
+      
+      Determine if the user is confirming to proceed with the analysis.
+      Confirmation includes: "yes", "correct", "looks good", "proceed", "go ahead", "confirm", or similar.
+      Rejection includes: "no", "change", "wrong", "incorrect", or requests to modify parameters.
+      
+      Respond with ONLY a raw JSON object, no markdown, no backticks:
+      {"confirmed": true/false, "response": "..."}
+      
+      Where response is a brief friendly message to the user.`
+    }
+  ]);
+
+  let decision;
+  try {
+    const cleaned = result.text.replace(/```json|```/g, '').trim();
+    decision = JSON.parse(cleaned);
+  } catch (e) {
+    decision = {
+      confirmed: false,
+      response: "I didn't quite catch that. Could you confirm with yes or no?"
+    };
+  }
+
+  if (decision.confirmed) {
+    const jobId = `job-${Date.now()}`;
+
+    // Stream confirmation text
+    for (const word of decision.response.split(' ')) {
+      emit(controller, 'text-delta', { text: word + ' ' });
+    }
+
+    // Emit analysis pending with all params
+    emit(controller, 'component', {
+      componentType: 'analysis-status',
+      data: {
+        status: 'pending',
+        jobId,
+        estimatedSeconds: 120,
+        message: 'Analysis started. Running pay equity calculations...',
+        params: {
+          jobTitle: context.jobSelection,
+          city: context.citySelection,
+          industries: context.selectedIndustries,
+          positionClassMin: context.selectedMin,
+          positionClassMax: context.selectedMax,
+          surveyCode: context.surveyCode,
+          smiCode: context.smiCode
+        }
+      }
+    });
+    emit(controller, 'finish', { status: 'success', reason: 'stop' });
+    controller.close();
+    return;
+
+  } else {
+    // User wants to change something
+    for (const word of decision.response.split(' ')) {
+      emit(controller, 'text-delta', { text: word + ' ' });
+    }
+    emit(controller, 'finish', { status: 'success', reason: 'stop' });
+    controller.close();
+    return;
+  }
+}
+
+
                   // ANALYSIS — trigger async analysis job
                   if (currentStep === 'analysis') {
                     const jobId = `job-${Date.now()}`;
@@ -348,6 +432,7 @@ const result = await agent.stream(
       },
 
       // ─── ANALYSIS COMPLETION — polling endpoint ───────────────────────
+      // ─── ANALYSIS COMPLETION — polling endpoint ───────────────────────
       {
         path: '/custom/analysis/:jobId',
         method: 'GET',
@@ -356,7 +441,11 @@ const result = await agent.stream(
             const jobId = c.req.param('jobId');
             const conversationId = c.get('conversationId') || null;
 
-            // Simulate completion — in production polls Databricks
+            const jobTimestamp = parseInt(jobId.replace('job-', ''));
+            const elapsed = Date.now() - jobTimestamp;
+            const isComplete = elapsed > 30000;
+            const progress = Math.min(Math.floor((elapsed / 10000) * 100), 99);
+
             const stream = new ReadableStream({
               start(controller) {
                 const encoder = new TextEncoder();
@@ -367,14 +456,32 @@ const result = await agent.stream(
                 };
 
                 emit('metadata', { conversationId, threadId: null });
-                emit('component', {
-                  componentType: 'analysis-status',
-                  data: {
-                    status: 'completed',
-                    jobId,
-                    analysis_data_id: `data-${Date.now()}`
-                  }
-                });
+
+                if (isComplete) {
+                  emit('component', {
+                    componentType: 'analysis-status',
+                    data: {
+                      status: 'completed',
+                      jobId,
+                      analysis_data_id: `data-${jobId}`
+                    }
+                  });
+                } else {
+                  emit('component', {
+                    componentType: 'analysis-status',
+                    data: {
+                      status: 'running',
+                      jobId,
+                      progress,
+                      message: progress < 30
+                        ? 'Connecting to Databricks...'
+                        : progress < 60
+                        ? 'Running pay equity calculations...'
+                        : 'Finalizing analysis results...'
+                    }
+                  });
+                }
+
                 emit('finish', { status: 'success', reason: 'stop' });
                 controller.close();
               }
@@ -390,7 +497,6 @@ const result = await agent.stream(
           };
         }
       }
-
     ]
   }
 });
